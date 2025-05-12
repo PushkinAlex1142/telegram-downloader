@@ -4,9 +4,9 @@ import os
 
 app = Flask(__name__)
 
-api_id = int(os.getenv("20099671"))
-api_hash = os.getenv("a7b9fa280f33e964d52c3fe374fbaef5")
-phone = os.getenv("+79912984740")  # Only needed for first login
+api_id = int(os.getenv("API_ID"))
+api_hash = os.getenv("API_HASH")
+phone = os.getenv("PHONE_NUMBER")  # Only needed for first login
 
 client = TelegramClient('session_name', api_id, api_hash)
 
