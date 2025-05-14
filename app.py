@@ -25,7 +25,11 @@ async def download_file(chat, message_id):
             # Debug: Check message details
             print(f"Message details: {msg}")
             print(f"Message type: {type(msg)}")
-            
+
+            messages = client.get_messages("@McKPartnersBot", limit=10)
+            for msg in messages:
+                print(f"{msg.id}: {msg.text} | media: {msg.media}")
+
             if msg is None:
                 return {"status": "error", "message": f"Message with ID {message_id} not found."}
                 
