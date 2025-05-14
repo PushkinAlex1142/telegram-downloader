@@ -1,31 +1,33 @@
-from flask import Flask, request, jsonify
+from flask import Flask
 from telethon.sync import TelegramClient
 import os
 
 app = Flask(__name__)
 
-api_id = int(os.getenv("API_ID"))
-api_hash = os.getenv("API_HASH")
-phone = os.getenv("PHONE_NUMBER")  # Only needed for first login
+# Get environment variables
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+PHONE_NUMBER = os.getenv("PHONE_NUMBER")
 
-client = TelegramClient('session_name', api_id, api_hash)
+# Create the client once (not inside the route)
+client = TelegramClient("session", API_ID, API_HASH)
 
-@app.route('/download', methods=['POST'])
-def download_file():
-    data = request.json
-    message_id = int(data.get("message_id"))
-    chat = data.get("chat")
+@app.route('/')
+def index():
+    return 'Server is running!'
 
-    async def get_file():
-        await client.start(phone)
-        message = await client.get_messages(chat, ids=message_id)
-        file_path = await message.download_media(file="./downloads")
-        return file_path
+@app.route('/download')
+def download():
+    client.connect()
 
-    with client:
-        path = client.loop.run_until_complete(get_file())
+    if not client.is_user_authorized():
+        client.send_code_request(PHONE_NUMBER)
+        return "Session not authorized. Go check the logs or add authorization logic."
 
-    return jsonify({"status": "ok", "path": path})
+    # Example download: Get messages from saved messages
+    messages = client.get_messages('me', limit=3)
+    for msg in messages:
+        print(msg.text)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    client.disconnect()
+    return "Download done!"
