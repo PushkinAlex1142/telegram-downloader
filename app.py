@@ -14,7 +14,7 @@ client = TelegramClient("session", API_ID, API_HASH)
 def index():
     return 'Server is running!'
 
-@app.route('/download')
+@app.route('/download', methods=['POST'])
 def download():
     client.connect()
     if not client.is_user_authorized():
