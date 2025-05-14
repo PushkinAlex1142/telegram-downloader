@@ -1,7 +1,7 @@
 import os
 import base64
 import asyncio
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from telethon.sync import TelegramClient
 from telethon import TelegramClient as AsyncTelegramClient  # для асинхронного использования
 
@@ -17,11 +17,6 @@ if session_data:
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 
-# Убедимся, что папка для скачанных файлов существует
-download_folder = 'downloads'
-if not os.path.exists(download_folder):
-    os.makedirs(download_folder)
-
 # Асинхронная функция для скачивания файла
 async def download_file(chat, message_id):
     try:
@@ -32,12 +27,7 @@ async def download_file(chat, message_id):
                 return {"status": "error", "message": f"Message with ID {message_id} not found."}
 
             if msg.media:
-                # Скачиваем медиа и сохраняем в папку 'downloads'
-                file_path = os.path.join(download_folder, f'{message_id}_media')
-                path = await client.download_media(msg, file=file_path)
-
-                # Удаляем файл после скачивания
-                os.remove(path)
+                path = await client.download_media(msg)
                 return {"status": "ok", "file_path": path}
             else:
                 return {"status": "error", "message": "Нет медиа в сообщении"}
@@ -90,6 +80,14 @@ def last_messages():
     result = loop.run_until_complete(get_last_messages(chat))
     
     return jsonify(result)
+
+# Маршрут для скачивания файла по его пути
+@app.route('/download_file/<path:file_path>', methods=['GET'])
+def serve_file(file_path):
+    try:
+        return send_from_directory(os.getcwd(), file_path, as_attachment=True)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 # Запуск сервера
 if __name__ == '__main__':
