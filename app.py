@@ -1,35 +1,47 @@
-from flask import Flask, request, jsonify
-from telethon.sync import TelegramClient
 import os
-import nest_asyncio
+import asyncio
+from flask import Flask, request, jsonify
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 
-# Apply nest_asyncio to enable asyncio within Flask
-nest_asyncio.apply()
+# Setup from environment variables
+API_ID = int(os.getenv('API_ID'))
+API_HASH = os.getenv('API_HASH')
+PHONE_NUMBER = os.getenv('PHONE_NUMBER')  # Optional if already authorized
 
 app = Flask(__name__)
 
-api_id = int(os.getenv("API_ID"))
-api_hash = os.getenv("API_HASH")
-phone = os.getenv("PHONE_NUMBER")  # your phone number for Telegram
+@app.route("/download", methods=["POST"])
+def download():
+    data = request.get_json()
 
-client = TelegramClient('session_name', api_id, api_hash)
-
-@app.route('/download', methods=['POST'])
-def download_file():
-    data = request.json
-    message_id = int(data.get("message_id"))
     chat = data.get("chat")
+    message_id = data.get("message_id")
 
-    async def get_file():
-        await client.start(phone)
-        message = await client.get_messages(chat, ids=message_id)
-        file_path = await message.download_media(file="./downloads")
+    if not chat or not message_id:
+        return jsonify({"error": "Missing 'chat' or 'message_id'"}), 400
+
+    try:
+        # Run async download logic inside sync route
+        path = asyncio.run(download_media(chat, message_id))
+        return jsonify({"status": "success", "file": path})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+async def download_media(chat, message_id):
+    session = StringSession()  # In-memory session (or load from env if needed)
+    async with TelegramClient(session, API_ID, API_HASH) as client:
+        await client.start()  # If not logged in, will ask for code in terminal
+        msg = await client.get_messages(chat, ids=message_id)
+
+        if not msg or not msg.media:
+            raise ValueError("No media found in that message.")
+
+        file_path = await msg.download_media()
         return file_path
 
-    # Run async function inside the event loop
-    path = client.loop.run_until_complete(get_file())
 
-    return jsonify({"status": "ok", "path": path})
-
-if __name__ == '__main__':
-    app.run(debug=True, host="0.0.0.0", port=5000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
