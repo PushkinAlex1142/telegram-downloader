@@ -2,21 +2,21 @@ import os
 import asyncio
 from flask import Flask, request, jsonify
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 
-# Load environment variables from Render dashboard
+# Load environment variables from Render
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-PHONE_NUMBER = os.getenv("PHONE_NUMBER")
+SESSION_STRING = os.getenv("SESSION_STRING")  # Must be set in Render dashboard
 
-# Initialize Telegram client
-client = TelegramClient("session", API_ID, API_HASH)
+# Create in-memory session client
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# Flask app setup
+# Flask setup
 app = Flask(__name__)
 
-# Async function to download message
 async def get_file(chat, message_id):
-    await client.start(PHONE_NUMBER)
+    await client.start()
     message = await client.get_messages(chat, ids=message_id)
     
     if not message or not message.document:
@@ -25,7 +25,6 @@ async def get_file(chat, message_id):
     path = await message.download_media()
     return path
 
-# Route to handle download
 @app.route('/download', methods=['POST'])
 def download():
     data = request.get_json()
@@ -41,6 +40,5 @@ def download():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# Run the app
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0")
