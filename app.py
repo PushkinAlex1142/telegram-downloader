@@ -17,6 +17,11 @@ if session_data:
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 
+# Убедимся, что папка для скачанных файлов существует
+download_folder = 'downloads'
+if not os.path.exists(download_folder):
+    os.makedirs(download_folder)
+
 # Асинхронная функция для скачивания файла
 async def download_file(chat, message_id):
     try:
@@ -27,7 +32,12 @@ async def download_file(chat, message_id):
                 return {"status": "error", "message": f"Message with ID {message_id} not found."}
 
             if msg.media:
-                path = await client.download_media(msg)
+                # Скачиваем медиа и сохраняем в папку 'downloads'
+                file_path = os.path.join(download_folder, f'{message_id}_media')
+                path = await client.download_media(msg, file=file_path)
+
+                # Удаляем файл после скачивания
+                os.remove(path)
                 return {"status": "ok", "file_path": path}
             else:
                 return {"status": "error", "message": "Нет медиа в сообщении"}
