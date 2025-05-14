@@ -1,41 +1,35 @@
-import asyncio
 from flask import Flask, request, jsonify
 from telethon.sync import TelegramClient
 import os
+import nest_asyncio
+
+# Apply nest_asyncio to enable asyncio within Flask
+nest_asyncio.apply()
 
 app = Flask(__name__)
 
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-PHONE_NUMBER = os.getenv("PHONE_NUMBER")
+api_id = int(os.getenv("API_ID"))
+api_hash = os.getenv("API_HASH")
+phone = os.getenv("PHONE_NUMBER")  # your phone number for Telegram
 
-client = TelegramClient('session', API_ID, API_HASH)
-
-@app.route('/')
-def index():
-    return 'Server is running!'
+client = TelegramClient('session_name', api_id, api_hash)
 
 @app.route('/download', methods=['POST'])
-def download():
-    # Get the data from the POST request
+def download_file():
     data = request.json
     message_id = int(data.get("message_id"))
     chat = data.get("chat")
-    
-    # Function to download the file asynchronously
+
     async def get_file():
-        await client.start(PHONE_NUMBER)
+        await client.start(phone)
         message = await client.get_messages(chat, ids=message_id)
         file_path = await message.download_media(file="./downloads")
         return file_path
 
-    # Run the async function in the event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    path = loop.run_until_complete(get_file())
-    
+    # Run async function inside the event loop
+    path = client.loop.run_until_complete(get_file())
+
     return jsonify({"status": "ok", "path": path})
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    app.run(debug=True, host="0.0.0.0", port=5000)
