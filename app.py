@@ -26,7 +26,9 @@ async def download_file(chat, message_id):
             print(f"Message details: {msg}")
             print(f"Message type: {type(msg)}")
             
-            # Check if the message has media
+            if msg is None:
+                return {"status": "error", "message": f"Message with ID {message_id} not found."}
+                
             if msg.media:
                 print(f"Media found: {msg.media}")
                 path = await client.download_media(msg)
