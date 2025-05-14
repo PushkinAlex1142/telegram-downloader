@@ -19,14 +19,24 @@ API_HASH = os.getenv("API_HASH")
 async def download_file(chat, message_id):
     try:
         async with TelegramClient("session", API_ID, API_HASH) as client:
+            # Fetch message by ID
             msg = await client.get_messages(chat, ids=message_id)
-            if msg and msg.media:
+            
+            # Debug: Check message details
+            print(f"Message details: {msg}")
+            print(f"Message type: {type(msg)}")
+            
+            # Check if the message has media
+            if msg.media:
+                print(f"Media found: {msg.media}")
                 path = await client.download_media(msg)
                 return {"status": "ok", "file_path": path}
             else:
-                return {"status": "error", "message": "Нет медиа в сообщении"}
+                # If no media, return error
+                return {"status": "error", "message": "No media in this message"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 @app.route('/')
 def index():
