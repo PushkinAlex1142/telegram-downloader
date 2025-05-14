@@ -38,7 +38,7 @@ async def download_file(chat, message_id):
 async def get_last_messages(chat):
     try:
         async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
-            messages = await client.get_messages(chat, limit=10)
+            messages = await client.get_messages(chat, limit=3)
             result = []
             for msg in messages:
                 result.append({
