@@ -1,44 +1,66 @@
+import os
+import base64
+import asyncio
 from flask import Flask, request, jsonify
 from telethon.sync import TelegramClient
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
-import base64
-import os
 
 app = Flask(__name__)
 
-API_ID = int(os.environ['API_ID'])
-API_HASH = os.environ['API_HASH']
+# Восстанавливаем файл сессии
+session_data = os.getenv("SESSION")
+if session_data:
+    with open("session.session", "wb") as f:
+        f.write(base64.b64decode(session_data))
 
-# Decode session file
-session_b64 = os.environ.get("SESSION_B64")
-with open("session.session", "wb") as f:
-    f.write(base64.b64decode(session_b64))
+# Получаем API_ID и API_HASH из Render
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
 
-@app.route("/")
-def index():
-    return "✅ Telegram Downloader is running!"
-
-@app.route("/last_messages", methods=["GET"])
-def last_messages():
-    chat = request.args.get("chat")
-    if not chat:
-        return jsonify({"error": "Chat username or ID is required"}), 400
-
+async def download_file(chat, message_id):
     try:
-        with TelegramClient("session", API_ID, API_HASH) as client:
-            messages = client.get_messages(chat, limit=10)
-            output = []
+        async with TelegramClient("session", API_ID, API_HASH) as client:
+            # Fetch message by ID
+            msg = await client.get_messages(chat, ids=message_id)
+            
+            # Debug: Check message details
+            print(f"Message details: {msg}")
+            print(f"Message type: {type(msg)}")
+
+            messages = client.get_messages("@McKPartnersBot", limit=10)
             for msg in messages:
-                output.append({
-                    "id": msg.id,
-                    "text": msg.text,
-                    "has_media": bool(msg.media)
-                })
+                print(f"{msg.id}: {msg.text} | media: {msg.media}")
 
-            return jsonify({"messages": output, "status": "ok"})
+            if msg is None:
+                return {"status": "error", "message": f"Message with ID {message_id} not found."}
+                
+            if msg.media:
+                print(f"Media found: {msg.media}")
+                path = await client.download_media(msg)
+                return {"status": "ok", "file_path": path}
+            else:
+                # If no media, return error
+                return {"status": "error", "message": "No media in this message"}
     except Exception as e:
-        return jsonify({"message": str(e), "status": "error"})
+        return {"status": "error", "message": str(e)}
 
-if __name__ == "__main__":
+
+@app.route('/')
+def index():
+    return '✅ Сервер Telegram работает!'
+
+@app.route('/download', methods=['POST'])
+def download():
+    data = request.json
+    chat = data.get("chat")
+    message_id = data.get("message_id")
+    
+    # Запускаем асинхронную задачу в основном потоке
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    result = loop.run_until_complete(download_file(chat, message_id))
+    
+    return jsonify(result)
+
+if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host='0.0.0.0', port=port)
