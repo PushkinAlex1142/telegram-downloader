@@ -28,30 +28,6 @@ async def download_file(chat, message_id):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# Method to upload an audio file from a user (via POST request)
-@app.route('/upload', methods=['POST'])
-def upload():
-    try:
-        # Check if the request contains a file
-        if 'file' not in request.files:
-            return jsonify({"status": "error", "message": "No file part"})
-
-        file = request.files['file']
-        
-        # Check if the file is an audio file (you can extend the validation as needed)
-        if file and file.filename.endswith('.mp3'):
-            # Save the file temporarily
-            file_path = os.path.join('uploads', file.filename)
-            file.save(file_path)
-            
-            # Now you can process the file (upload it, store it, etc.)
-            # For example, let's just return the path where it's saved
-            return jsonify({"status": "ok", "file_path": file_path})
-        else:
-            return jsonify({"status": "error", "message": "Invalid file type, only MP3 files are allowed"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
 @app.route('/')
 def index():
     return '✅ Сервер Telegram работает!'
