@@ -3,21 +3,19 @@ import base64
 import asyncio
 from flask import Flask, request, jsonify, send_from_directory
 from telethon.sync import TelegramClient
-from telethon import TelegramClient as AsyncTelegramClient  # для асинхронного использования
+from telethon import TelegramClient as AsyncTelegramClient
 
 app = Flask(__name__)
 
-# Восстанавливаем файл сессии
 session_data = os.getenv("SESSION")
 if session_data:
     with open("session.session", "wb") as f:
         f.write(base64.b64decode(session_data))
 
-# Получаем API_ID и API_HASH из Render
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 
-# Асинхронная функция для скачивания файла
+
 async def download_file(chat, message_id):
     try:
         async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
@@ -30,11 +28,10 @@ async def download_file(chat, message_id):
                 path = await client.download_media(msg)
                 return {"status": "ok", "file_path": path}
             else:
-                return {"status": "error", "message": "Нет медиа в сообщении"}
+                return {"status": "error", "message": "No media in the message."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# Асинхронная функция для получения последних сообщений
 async def get_last_messages(chat):
     try:
         async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
@@ -50,12 +47,10 @@ async def get_last_messages(chat):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# Главная страница
 @app.route('/')
 def index():
-    return '✅ Сервер Telegram работает!'
+    return '✅ Telegram server works!'
 
-# Скачивание медиа по chat и message_id
 @app.route('/download', methods=['POST'])
 def download():
     data = request.json
@@ -68,12 +63,11 @@ def download():
     
     return jsonify(result)
 
-# Получение последних 10 сообщений из чата
 @app.route('/last_messages', methods=['GET'])
 def last_messages():
     chat = request.args.get("chat")
     if not chat:
-        return jsonify({"status": "error", "message": "Параметр 'chat' обязателен"}), 400
+        return jsonify({"status": "error", "message": "Parameter 'chat' is required"}), 400
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -81,7 +75,6 @@ def last_messages():
     
     return jsonify(result)
 
-# Маршрут для скачивания файла по его пути
 @app.route('/download_file/<path:file_path>', methods=['GET'])
 def serve_file(file_path):
     try:
@@ -89,7 +82,6 @@ def serve_file(file_path):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
-# Запуск сервера
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
