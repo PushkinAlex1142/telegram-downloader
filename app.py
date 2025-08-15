@@ -1,6 +1,9 @@
 import os
 import base64
 import asyncio
+import json
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from flask import Flask, request, jsonify, send_from_directory
 from telethon.sync import TelegramClient
 from telethon import TelegramClient as AsyncTelegramClient
@@ -14,6 +17,49 @@ if session_data:
 
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
+
+def connect_gsheet():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+
+    # Берём ключ из переменной окружения на Render (GOOGLE_CREDENTIALS в Base64 → строка JSON)
+    creds_json = os.getenv("GOOGLE_CREDENTIALS")
+    if not creds_json:
+        raise Exception("Google credentials not found in environment variables")
+
+    creds_dict = json.loads(base64.b64decode(creds_json))
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    return client
+
+
+async def update_whitelist(chat_id, sheet_name, worksheet_name="Sheet1"):
+    async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
+        participants = await client.get_participants(chat_id)
+        whitelist_ids = [[str(p.id)] for p in participants]  # Каждая ID в новой строке
+
+        gclient = connect_gsheet()
+        sheet = gclient.open(sheet_name).worksheet(worksheet_name)
+        sheet.clear()
+        sheet.update('A1', whitelist_ids)
+
+        return {"status": "ok", "count": len(whitelist_ids)}
+
+
+@app.route('/update_whitelist', methods=['POST'])
+def update_whitelist_route():
+    data = request.json
+    chat_id = data.get("chat_id")
+    sheet_name = data.get("sheet_name")
+    worksheet_name = data.get("worksheet_name", "Sheet1")
+
+    if not chat_id or not sheet_name:
+        return jsonify({"status": "error", "message": "chat_id and sheet_name are required"}), 400
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    result = loop.run_until_complete(update_whitelist(chat_id, sheet_name, worksheet_name))
+
+    return jsonify(result)
 
 
 async def download_file(chat, message_id):
