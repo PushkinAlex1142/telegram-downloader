@@ -34,13 +34,18 @@ def connect_gsheet():
 
 async def update_whitelist(chat_id, sheet_name, worksheet_name="Sheet1"):
     async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
-        participants = await client.get_participants(chat_id)
-        whitelist_ids = [[str(p.id)] for p in participants]  # Каждая ID в новой строке
+        try:
+            entity = await client.get_entity(chat_id)
+            participants = await client.get_participants(entity)
+        except ValueError as e:
+            return {"status": "error", "message": f"Cannot find chat: {str(e)}"}
+
+        whitelist_ids = [[str(p.id)] for p in participants]
 
         gclient = connect_gsheet()
         sheet = gclient.open(sheet_name).worksheet(worksheet_name)
         sheet.clear()
-        sheet.update('A1', whitelist_ids)
+        sheet.append_rows(whitelist_ids)
 
         return {"status": "ok", "count": len(whitelist_ids)}
 
