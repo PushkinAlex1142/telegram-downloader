@@ -26,7 +26,7 @@ def connect_gsheet():
     if not creds_json:
         raise Exception("Google credentials not found in environment variables")
 
-    creds_dict = json.loads(base64.b64decode(creds_json))
+    creds_dict = json.loads(creds_json)
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     return client
