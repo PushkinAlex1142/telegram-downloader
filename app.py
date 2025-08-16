@@ -48,7 +48,6 @@ async def update_whitelist(chat_id, sheet_name, worksheet_name):
     worksheet = sh.worksheet(worksheet_name)
 
     worksheet.clear()  
-    worksheet.update("A1", [["ID"]])   # пишем заголовок
     if ids:
         worksheet.update("A2", ids)    # пишем всех остальных с A2
     return {"status": "success", "count": len(ids)}
