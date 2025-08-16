@@ -46,7 +46,7 @@ async def update_whitelist(chat_id, sheet_name, worksheet_name="WhiteList"):
         sheet = gclient.open(sheet_name).worksheet(worksheet_name)
 
         sheet.clear()
-        worksheet.update("A1", [["id"]])
+        sheet.update("A1", [["id"]])
         if ids:
             sheet.update("A2", ids)
         return {"status": "ok", "count": len(ids)}
