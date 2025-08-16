@@ -39,14 +39,14 @@ async def update_whitelist(chat_id, sheet_name, worksheet_name="WhiteList"):
 
         ids = []
         for user in participants:
-            if user.id != me.id:   # исключаем бота
-                ids.append([str(user.id)])  # список для записи в колонку
+            if user.username and user.username != me.username:
+                ids.append([user.username])
 
         gclient = connect_gsheet()
         sheet = gclient.open(sheet_name).worksheet(worksheet_name)
 
         sheet.clear()
-        sheet.update("A1", [["id"]])
+        sheet.update("A1", [["username"]])
         if ids:
             sheet.update("A2", ids)
         return {"status": "ok", "count": len(ids)}
