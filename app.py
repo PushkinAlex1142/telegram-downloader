@@ -32,22 +32,27 @@ def connect_gsheet():
     return client
 
 
-async def update_whitelist(chat_id, sheet_name, worksheet_name="Sheet1"):
-    async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
-        try:
-            entity = await client.get_entity(chat_id)
-            participants = await client.get_participants(entity)
-        except ValueError as e:
-            return {"status": "error", "message": f"Cannot find chat: {str(e)}"}
+async def update_whitelist(chat_id, sheet_name, worksheet_name):
+    await client.start()
+    me = await client.get_me()   # получаем данные самого бота
+    participants = await client.get_participants(chat_id)
 
-        whitelist_ids = [[str(p.id)] for p in participants]
+    ids = []
+    for user in participants:
+        if user.id != me.id:  # исключаем бота
+            ids.append([str(user.id)])  # оборачиваем в список, чтобы корректно писалось в колонку
 
-        gclient = connect_gsheet()
-        sheet = gclient.open(sheet_name).worksheet(worksheet_name)
-        sheet.clear()
-        sheet.append_rows(whitelist_ids)
+    # подключение к Google Sheet
+    gc = gspread.service_account_from_dict(google_creds)
+    sh = gc.open(sheet_name)
+    worksheet = sh.worksheet(worksheet_name)
 
-        return {"status": "ok", "count": len(whitelist_ids)}
+    worksheet.clear()  
+    worksheet.update("A1", [["ID"]])   # пишем заголовок
+    if ids:
+        worksheet.update("A2", ids)    # пишем всех остальных с A2
+    return {"status": "success", "count": len(ids)}
+
 
 
 @app.route('/update_whitelist', methods=['POST'])
