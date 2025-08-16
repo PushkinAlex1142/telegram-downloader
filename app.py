@@ -34,13 +34,11 @@ def connect_gsheet():
 
 async def update_whitelist(chat_id, sheet_name, worksheet_name="WhiteList"):
     async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
-        me = await client.get_me()   # сам бот
         participants = await client.get_participants(chat_id)
 
         ids = []
         for user in participants:
-            if user.username and user.username != me.username:
-                ids.append([user.username])
+            ids.append([user.username])
 
         gclient = connect_gsheet()
         sheet = gclient.open(sheet_name).worksheet(worksheet_name)
