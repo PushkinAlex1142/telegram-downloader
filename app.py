@@ -9,14 +9,15 @@ from oauth2client.service_account import ServiceAccountCredentials
 from flask import Flask, jsonify, send_from_directory
 from telethon import TelegramClient, events
 import threading
+import requests
 
-# Логирование
+# ---------------- Логирование ----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Создание сессии Telegram
+# ---------------- Telegram session ----------------
 session_data = os.getenv("SESSION")
 if session_data:
     with open("session.session", "wb") as f:
@@ -57,17 +58,33 @@ async def check_user_in_whitelist(username, sheet_name, worksheet_name="WhiteLis
         if not gclient:
             return False
         sheet = gclient.open(sheet_name).worksheet(worksheet_name)
-        usernames = sheet.col_values(1)
-        return username in usernames[1:]
+        usernames = [u.strip().lower() for u in sheet.col_values(1)[1:]]  # убираем заголовок, пробелы и регистр
+        return username.lower() in usernames
     except Exception as e:
         logger.error(f"Whitelist check error: {e}")
         return False
 
-# ---------------- Telegram ----------------
+# ---------------- Save last file ----------------
 def save_last_file_info(data):
     with open(LAST_FILE_JSON, "w", encoding="utf-8") as f:
         json.dump(data, f)
 
+# ---------------- Webhook для N8N ----------------
+def trigger_n8n_webhook(file_info):
+    webhook_url = os.getenv("N8N_WEBHOOK_URL")
+    if not webhook_url:
+        logger.warning("N8N webhook URL not set")
+        return
+    try:
+        response = requests.post(webhook_url, json=file_info, timeout=5)
+        if response.status_code == 200:
+            logger.info("N8N webhook triggered successfully")
+        else:
+            logger.warning(f"N8N webhook returned status {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error triggering N8N webhook: {e}")
+
+# ---------------- Telegram ----------------
 async def download_media_file(event):
     try:
         sender = await event.get_sender()
@@ -95,7 +112,11 @@ async def download_media_file(event):
             "username": username
         }
         save_last_file_info(last_file)
+
         logger.info(f"File downloaded successfully: {last_file['file_name']}")
+
+        # ✅ Trigger webhook
+        trigger_n8n_webhook(last_file)
 
     except Exception as e:
         logger.error(f"Error downloading media file: {e}")
@@ -120,7 +141,7 @@ def run_telegram_client():
     loop.run_until_complete(setup_telegram_client())
     loop.close()
 
-# ---------------- Flask ----------------
+# ---------------- Flask routes ----------------
 @app.route('/last_file', methods=['GET'])
 def get_last_file():
     if not os.path.exists(LAST_FILE_JSON):
