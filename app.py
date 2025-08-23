@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Создание сессии из переменной окружения
+# Создание сессии Telegram
 session_data = os.getenv("SESSION")
 if session_data:
     with open("session.session", "wb") as f:
@@ -25,13 +25,17 @@ if session_data:
 
 API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH", "")
+MAX_FILE_SIZE = 200 * 1024 * 1024  # 200 МБ
 
-MAX_FILE_SIZE = None
-last_downloaded_file = None
+DOWNLOAD_DIR = "downloads"
+LAST_FILE_JSON = "last_file.json"
+
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
 telegram_client = None
 
+# ---------------- Google Sheets ----------------
 def connect_gsheet():
-    """Подключение к Google Sheets"""
     try:
         creds_json = os.getenv("GOOGLE_CREDENTIALS")
         if not creds_json:
@@ -46,9 +50,8 @@ def connect_gsheet():
         return None
 
 async def check_user_in_whitelist(username, sheet_name, worksheet_name="WhiteList"):
-    """Проверка пользователя в whitelist"""
     try:
-        if not username or not sheet_name:
+        if not username:
             return False
         gclient = connect_gsheet()
         if not gclient:
@@ -60,28 +63,30 @@ async def check_user_in_whitelist(username, sheet_name, worksheet_name="WhiteLis
         logger.error(f"Whitelist check error: {e}")
         return False
 
+# ---------------- Telegram ----------------
+def save_last_file_info(data):
+    with open(LAST_FILE_JSON, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
 async def download_media_file(event):
-    """Скачивание медиа-файла"""
-    global last_downloaded_file
     try:
         sender = await event.get_sender()
         username = getattr(sender, "username", "unknown")
         sheet_name = os.getenv("GOOGLE_SHEET_NAME")
-        if sheet_name and not await check_user_in_whitelist(username, sheet_name):
-            logger.info(f"User {username} not in whitelist")
+        if not sheet_name or not await check_user_in_whitelist(username, sheet_name):
+            logger.info(f"User {username} not in whitelist, skipping download")
             return
 
         if hasattr(event.media, "document") and event.media.document.size > MAX_FILE_SIZE:
-            logger.info("File too large, skipping")
+            logger.info(f"File too large ({event.media.document.size} bytes), skipping")
             return
 
-        os.makedirs("downloads", exist_ok=True)
-        path = await event.download_media(file="downloads")
+        path = await event.download_media(file=DOWNLOAD_DIR)
         if not path:
             logger.error("Failed to download file")
             return
 
-        last_downloaded_file = {
+        last_file = {
             "file_path": path,
             "file_name": os.path.basename(path),
             "file_size": os.path.getsize(path),
@@ -89,12 +94,13 @@ async def download_media_file(event):
             "download_time": datetime.now().isoformat(),
             "username": username
         }
-        logger.info(f"Downloaded file: {last_downloaded_file['file_name']}")
+        save_last_file_info(last_file)
+        logger.info(f"File downloaded successfully: {last_file['file_name']}")
+
     except Exception as e:
-        logger.error(f"Download error: {e}")
+        logger.error(f"Error downloading media file: {e}")
 
 async def setup_telegram_client():
-    """Настройка и запуск Telegram клиента"""
     global telegram_client
     telegram_client = TelegramClient("session", API_ID, API_HASH)
 
@@ -114,26 +120,28 @@ def run_telegram_client():
     loop.run_until_complete(setup_telegram_client())
     loop.close()
 
-# Flask эндпоинты
+# ---------------- Flask ----------------
 @app.route('/last_file', methods=['GET'])
 def get_last_file():
-    global last_downloaded_file
-    if not last_downloaded_file:
+    if not os.path.exists(LAST_FILE_JSON):
         return jsonify({"status": "error", "message": "No files downloaded yet"}), 404
-    file_exists = os.path.exists(last_downloaded_file["file_path"])
-    response = {**last_downloaded_file, "file_exists": file_exists}
+    with open(LAST_FILE_JSON, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    file_exists = os.path.exists(data["file_path"])
+    data["file_exists"] = file_exists
     if file_exists:
-        response["current_size"] = os.path.getsize(last_downloaded_file["file_path"])
-    return jsonify({"status": "ok", "file": response})
+        data["current_size"] = os.path.getsize(data["file_path"])
+    return jsonify({"status": "ok", "file": data})
 
 @app.route('/download_file/<path:filename>', methods=['GET'])
 def serve_file(filename):
     safe_filename = os.path.basename(filename)
-    file_full_path = os.path.join("downloads", safe_filename)
+    file_full_path = os.path.join(DOWNLOAD_DIR, safe_filename)
     if not os.path.exists(file_full_path):
         return jsonify({"status": "error", "message": "File not found"}), 404
-    return send_from_directory("downloads", safe_filename, as_attachment=True)
+    return send_from_directory(DOWNLOAD_DIR, safe_filename, as_attachment=True)
 
+# ---------------- Main ----------------
 if __name__ == '__main__':
     telegram_thread = threading.Thread(target=run_telegram_client, daemon=True)
     telegram_thread.start()
