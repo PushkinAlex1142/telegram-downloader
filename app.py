@@ -6,7 +6,7 @@ import gspread
 import logging
 from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory, request
 from telethon import TelegramClient, events
 import threading
 import requests
@@ -58,7 +58,7 @@ async def check_user_in_whitelist(username, sheet_name, worksheet_name="WhiteLis
         if not gclient:
             return False
         sheet = gclient.open(sheet_name).worksheet(worksheet_name)
-        usernames = [u.strip().lower() for u in sheet.col_values(1)[1:]]  # убираем заголовок, пробелы и регистр
+        usernames = [u.strip().lower() for u in sheet.col_values(1)[1:]]  # убрать заголовок и пробелы
         return username.lower() in usernames
     except Exception as e:
         logger.error(f"Whitelist check error: {e}")
@@ -112,7 +112,6 @@ async def download_media_file(event):
             "username": username
         }
         save_last_file_info(last_file)
-
         logger.info(f"File downloaded successfully: {last_file['file_name']}")
 
         # ✅ Trigger webhook
@@ -161,6 +160,34 @@ def serve_file(filename):
     if not os.path.exists(file_full_path):
         return jsonify({"status": "error", "message": "File not found"}), 404
     return send_from_directory(DOWNLOAD_DIR, safe_filename, as_attachment=True)
+
+@app.route('/delete_file/<path:filename>', methods=['POST'])
+def delete_file(filename):
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(DOWNLOAD_DIR, safe_filename)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        logger.info(f"Deleted file: {safe_filename}")
+        return jsonify({"status": "ok", "message": f"{safe_filename} deleted"})
+    else:
+        return jsonify({"status": "error", "message": "File not found"}), 404
+
+@app.route('/cleanup', methods=['POST'])
+def cleanup_files():
+    files_deleted = 0
+    for filename in os.listdir(DOWNLOAD_DIR):
+        file_path = os.path.join(DOWNLOAD_DIR, filename)
+        if os.path.isfile(file_path):
+            try:
+                os.remove(file_path)
+                files_deleted += 1
+                logger.info(f"Deleted file: {filename}")
+            except Exception as e:
+                logger.error(f"Error deleting file {filename}: {e}")
+    # Сброс last_file.json
+    if os.path.exists(LAST_FILE_JSON):
+        os.remove(LAST_FILE_JSON)
+    return jsonify({"status": "ok", "files_deleted": files_deleted})
 
 # ---------------- Main ----------------
 if __name__ == '__main__':
