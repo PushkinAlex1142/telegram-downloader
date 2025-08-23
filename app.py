@@ -4,10 +4,10 @@ import asyncio
 import json
 import gspread
 import logging
+from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 from flask import Flask, request, jsonify, send_from_directory
-from telethon.sync import TelegramClient
-from telethon import TelegramClient as AsyncTelegramClient
+from telethon import TelegramClient, events
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -18,237 +18,217 @@ app = Flask(__name__)
 # Создание сессии из переменной окружения
 session_data = os.getenv("SESSION")
 if session_data:
-    with open("session.session", "wb") as f:
-        f.write(base64.b64decode(session_data))
+    try:
+        with open("session.session", "wb") as f:
+            f.write(base64.b64decode(session_data))
+        logger.info("Session file created successfully")
+    except Exception as e:
+        logger.error(f"Error creating session file: {e}")
 
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
+API_ID = int(os.getenv("API_ID", 0))
+API_HASH = os.getenv("API_HASH", "")
 
 # Максимальный размер файла для скачивания (в байтах)
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 МБ
 
+# Глобальная переменная для хранения информации о последнем файле
+last_downloaded_file = None
+
 def connect_gsheet():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
-    # Берём ключ из переменной окружения на Render (GOOGLE_CREDENTIALS в Base64 → строка JSON)
-    creds_json = os.getenv("GOOGLE_CREDENTIALS")
-    if not creds_json:
-        raise Exception("Google credentials not found in environment variables")
-
-    creds_dict = json.loads(creds_json)
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    return client
+    """Подключение к Google Sheets"""
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        
+        creds_json = os.getenv("GOOGLE_CREDENTIALS")
+        if not creds_json:
+            raise Exception("Google credentials not found in environment variables")
+        
+        creds_dict = json.loads(creds_json)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        logger.error(f"Error connecting to Google Sheets: {e}")
+        raise
 
 async def check_user_in_whitelist(username, sheet_name, worksheet_name="WhiteList"):
     """Проверяет, есть ли пользователь в белом списке Google Sheets"""
     try:
+        if not username or not sheet_name:
+            return False
+            
         gclient = connect_gsheet()
         sheet = gclient.open(sheet_name).worksheet(worksheet_name)
         
         # Получаем все значения из колонки A (usernames)
         usernames = sheet.col_values(1)
         
-        # Проверяем наличие username в списке
-        if username in usernames:
+        # Проверяем наличие username в списке (игнорируем заголовок)
+        if username in usernames[1:]:
             return True
         return False
     except Exception as e:
         logger.error(f"Error checking whitelist: {e}")
         return False
 
-async def update_whitelist(chat_id, sheet_name, worksheet_name="WhiteList"):
-    async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
-        participants = await client.get_participants(chat_id)
+async def download_media_file(event, sheet_name):
+    """Скачивает медиафайл из сообщения"""
+    global last_downloaded_file
+    
+    try:
+        # Получаем информацию о отправителе
+        sender = await event.get_sender()
+        username = sender.username
+        
+        # Проверяем белый список
+        if not await check_user_in_whitelist(username, sheet_name):
+            logger.info(f"User {username} not in whitelist, skipping download")
+            return
+        
+        # Проверяем размер файла
+        if hasattr(event.media, 'document') and event.media.document:
+            file_size = event.media.document.size
+            if file_size > MAX_FILE_SIZE:
+                logger.info(f"File too large ({file_size} bytes), skipping download")
+                return
+        
+        # Скачиваем файл
+        download_dir = "downloads"
+        os.makedirs(download_dir, exist_ok=True)
+        
+        path = await event.download_media(file=download_dir)
+        if not path:
+            logger.error("Failed to download file")
+            return
+            
+        file_size = os.path.getsize(path) if os.path.exists(path) else 0
+        
+        # Сохраняем информацию о файле
+        last_downloaded_file = {
+            "file_path": path,
+            "file_name": os.path.basename(path),
+            "file_size": file_size,
+            "download_url": f"/download_file/{os.path.basename(path)}",
+            "download_time": datetime.now().isoformat(),
+            "chat_id": event.chat_id,
+            "sender_id": sender.id,
+            "username": username
+        }
+        
+        logger.info(f"File downloaded successfully: {last_downloaded_file['file_name']}")
+        
+    except Exception as e:
+        logger.error(f"Error downloading media file: {e}")
 
-        ids = []
-        for user in participants:
-            ids.append([user.username])
+async def start_telegram_client():
+    """Запускает Telegram клиент и настраивает обработчики"""
+    try:
+        client = TelegramClient("session", API_ID, API_HASH)
+        
+        @client.on(events.NewMessage(incoming=True))
+        async def handler(event):
+            # Проверяем, что это личное сообщение и содержит медиа
+            if event.is_private and event.media:
+                sheet_name = os.getenv("GOOGLE_SHEET_NAME")
+                if sheet_name:
+                    await download_media_file(event, sheet_name)
+        
+        await client.start()
+        logger.info("Telegram client started successfully")
+        await client.run_until_disconnected()
+        
+    except Exception as e:
+        logger.error(f"Error starting Telegram client: {e}")
 
-        gclient = connect_gsheet()
-        sheet = gclient.open(sheet_name).worksheet(worksheet_name)
-
-        sheet.clear()
-        sheet.update("A1", [["username"]])
-        if ids:
-            sheet.update("A2", ids)
-        return {"status": "ok", "count": len(ids)}
-
-@app.route('/update_whitelist', methods=['POST'])
-def update_whitelist_route():
-    data = request.json
-    chat_id = data.get("chat_id")
-    sheet_name = data.get("sheet_name")
-    worksheet_name = data.get("worksheet_name", "Sheet1")
-
-    if not chat_id or not sheet_name:
-        return jsonify({"status": "error", "message": "chat_id and sheet_name are required"}), 400
-
+def run_telegram_client():
+    """Запускает Telegram клиент в отдельном потоке"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(update_whitelist(chat_id, sheet_name, worksheet_name))
+    loop.run_until_complete(start_telegram_client())
 
-    return jsonify(result)
-
-async def download_file(chat, message_id, username=None, sheet_name=None):
-    """Скачивает файл с проверкой белого списка и размера файла"""
-    try:
-        # Проверка белого списка, если указаны username и sheet_name
-        if username and sheet_name:
-            is_whitelisted = await check_user_in_whitelist(username, sheet_name)
-            if not is_whitelisted:
-                return {"status": "error", "message": "User not in whitelist"}
-        
-        async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
-            entity = await client.get_entity(chat)
-            msg = await client.get_messages(entity, ids=message_id)
-
-            if msg is None:
-                return {"status": "error", "message": f"Message with ID {message_id} not found."}
-
-            if msg.media:
-                # Проверяем размер файла перед скачиванием
-                if msg.media.document:
-                    file_size = msg.media.document.size
-                    if file_size > MAX_FILE_SIZE:
-                        return {
-                            "status": "error", 
-                            "message": f"File too large ({file_size} bytes). Maximum allowed: {MAX_FILE_SIZE} bytes",
-                            "file_size": file_size,
-                            "max_size": MAX_FILE_SIZE
-                        }
-                
-                # Скачиваем файл
-                path = await client.download_media(msg)
-                file_size = os.path.getsize(path) if os.path.exists(path) else 0
-                
-                return {
-                    "status": "ok", 
-                    "file_path": path,
-                    "file_size": file_size,
-                    "file_name": os.path.basename(path),
-                    "download_url": f"/download_file/{os.path.basename(path)}"
-                }
-            else:
-                return {"status": "error", "message": "No media in the message."}
-    except Exception as e:
-        logger.error(f"Error downloading file: {e}")
-        return {"status": "error", "message": str(e)}
-
-async def get_last_messages(chat, limit=10):
-    try:
-        async with AsyncTelegramClient("session", API_ID, API_HASH) as client:
-            messages = await client.get_messages(chat, limit=limit)
-            result = []
-            for msg in messages:
-                file_info = None
-                if msg.media and hasattr(msg.media, 'document'):
-                    file_info = {
-                        "size": msg.media.document.size,
-                        "name": getattr(msg.media.document.attributes[0], 'file_name', 'unknown') if msg.media.document.attributes else 'unknown',
-                        "mime_type": msg.media.document.mime_type
-                    }
-                
-                result.append({
-                    "id": msg.id,
-                    "text": msg.text,
-                    "has_media": bool(msg.media),
-                    "file_info": file_info,
-                    "date": msg.date.isoformat() if msg.date else None,
-                    "from_user": msg.sender_id if msg.sender_id else None
-                })
-            return {"status": "ok", "messages": result}
-    except Exception as e:
-        logger.error(f"Error getting messages: {e}")
-        return {"status": "error", "message": str(e)}
+# Запускаем Telegram клиент в фоновом потоке
+import threading
+telegram_thread = threading.Thread(target=run_telegram_client, daemon=True)
+telegram_thread.start()
 
 @app.route('/')
 def index():
     return '✅ Telegram server works!'
 
-@app.route('/download', methods=['POST'])
-def download():
-    """Эндпоинт для скачивания файла с проверкой белого списка"""
-    data = request.json
-    chat = data.get("chat")
-    message_id = data.get("message_id")
-    username = data.get("username")  # username пользователя для проверки
-    sheet_name = data.get("sheet_name")  # название Google Sheet для проверки
+@app.route('/last_file', methods=['GET'])
+def get_last_file():
+    """Возвращает информацию о последнем скачанном файле"""
+    global last_downloaded_file
     
-    if not chat or not message_id:
-        return jsonify({"status": "error", "message": "chat and message_id are required"}), 400
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(download_file(chat, message_id, username, sheet_name))
+    if not last_downloaded_file:
+        return jsonify({
+            "status": "error", 
+            "message": "No files downloaded yet"
+        }), 404
     
-    return jsonify(result)
-
-@app.route('/last_messages', methods=['GET'])
-def last_messages():
-    chat = request.args.get("chat")
-    limit = int(request.args.get("limit", 10))
+    # Проверяем, существует ли файл
+    file_path = last_downloaded_file.get('file_path')
+    file_exists = file_path and os.path.exists(file_path)
     
-    if not chat:
-        return jsonify({"status": "error", "message": "Parameter 'chat' is required"}), 400
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(get_last_messages(chat, limit))
+    response_data = {
+        "status": "ok",
+        "file": {
+            **last_downloaded_file,
+            "file_exists": file_exists
+        }
+    }
     
-    return jsonify(result)
+    # Добавляем текущий размер, если файл существует
+    if file_exists:
+        response_data["file"]["current_size"] = os.path.getsize(file_path)
+    
+    return jsonify(response_data)
 
-@app.route('/download_file/<path:file_path>', methods=['GET'])
-def serve_file(file_path):
+@app.route('/download_file/<path:filename>', methods=['GET'])
+def serve_file(filename):
     """Отдает скачанный файл для n8n"""
     try:
         # Безопасная проверка пути
-        safe_path = os.path.basename(file_path)
-        directory = os.getcwd()
-        file_full_path = os.path.join(directory, safe_path)
+        safe_filename = os.path.basename(filename)
+        directory = "downloads"
+        file_full_path = os.path.join(directory, safe_filename)
         
         if not os.path.exists(file_full_path):
             return jsonify({"status": "error", "message": "File not found"}), 404
             
-        return send_from_directory(directory, safe_path, as_attachment=True)
+        return send_from_directory(directory, safe_filename, as_attachment=True)
     except Exception as e:
         logger.error(f"Error serving file: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/file_info/<path:file_path>', methods=['GET'])
-def file_info(file_path):
-    """Информация о файле для n8n"""
-    try:
-        safe_path = os.path.basename(file_path)
-        file_full_path = os.path.join(os.getcwd(), safe_path)
-        
-        if not os.path.exists(file_full_path):
-            return jsonify({"status": "error", "message": "File not found"}), 404
-            
-        return jsonify({
-            "status": "ok",
-            "file_name": safe_path,
-            "file_size": os.path.getsize(file_full_path),
-            "created_at": os.path.getctime(file_full_path),
-            "modified_at": os.path.getmtime(file_full_path)
-        })
-    except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/cleanup', methods=['POST'])
 def cleanup_files():
     """Очистка скачанных файлов (для n8n)"""
+    global last_downloaded_file
+    
     try:
         files_deleted = 0
-        for filename in os.listdir(os.getcwd()):
-            if filename != "session.session" and os.path.isfile(filename):
-                os.remove(filename)
-                files_deleted += 1
+        download_dir = "downloads"
+        
+        if os.path.exists(download_dir):
+            for filename in os.listdir(download_dir):
+                file_path = os.path.join(download_dir, filename)
+                if os.path.isfile(file_path):
+                    try:
+                        os.remove(file_path)
+                        files_deleted += 1
+                        logger.info(f"Deleted file: {filename}")
+                    except Exception as e:
+                        logger.error(f"Error deleting file {filename}: {e}")
+        
+        # Сбрасываем информацию о последнем файле
+        last_downloaded_file = None
                 
         return jsonify({"status": "ok", "files_deleted": files_deleted})
     except Exception as e:
+        logger.error(f"Error in cleanup endpoint: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
