@@ -26,7 +26,7 @@ if session_data:
 API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH", "")
 
-MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 МБ
+MAX_FILE_SIZE = None
 last_downloaded_file = None
 telegram_client = None
 
