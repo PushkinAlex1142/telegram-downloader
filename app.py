@@ -89,7 +89,9 @@ async def download_media_file(event):
     try:
         sender = await event.get_sender()
         username = getattr(sender, "username", "unknown")
+        chat_id = event.chat_id  # <- добавили chat_id
         sheet_name = os.getenv("GOOGLE_SHEET_NAME")
+
         if not sheet_name or not await check_user_in_whitelist(username, sheet_name):
             logger.info(f"User {username} not in whitelist, skipping download")
             return
@@ -109,16 +111,18 @@ async def download_media_file(event):
             "file_size": os.path.getsize(path),
             "download_url": f"/download_file/{os.path.basename(path)}",
             "download_time": datetime.now().isoformat(),
-            "username": username
+            "username": username,
+            "chat_id": chat_id  # <- добавили в JSON
         }
         save_last_file_info(last_file)
         logger.info(f"File downloaded successfully: {last_file['file_name']}")
 
-        # ✅ Trigger webhook
+        # Trigger N8N webhook
         trigger_n8n_webhook(last_file)
 
     except Exception as e:
         logger.error(f"Error downloading media file: {e}")
+        
 
 async def setup_telegram_client():
     global telegram_client
