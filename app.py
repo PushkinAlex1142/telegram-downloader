@@ -33,6 +33,7 @@ MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 МБ
 
 # Глобальная переменная для хранения информации о последнем файле
 last_downloaded_file = None
+telegram_client = None
 
 def connect_gsheet():
     """Подключение к Google Sheets"""
@@ -41,7 +42,8 @@ def connect_gsheet():
         
         creds_json = os.getenv("GOOGLE_CREDENTIALS")
         if not creds_json:
-            raise Exception("Google credentials not found in environment variables")
+            logger.warning("Google credentials not found in environment variables")
+            return None
         
         creds_dict = json.loads(creds_json)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -49,7 +51,7 @@ def connect_gsheet():
         return client
     except Exception as e:
         logger.error(f"Error connecting to Google Sheets: {e}")
-        raise
+        return None
 
 async def check_user_in_whitelist(username, sheet_name, worksheet_name="WhiteList"):
     """Проверяет, есть ли пользователь в белом списке Google Sheets"""
@@ -58,6 +60,9 @@ async def check_user_in_whitelist(username, sheet_name, worksheet_name="WhiteLis
             return False
             
         gclient = connect_gsheet()
+        if not gclient:
+            return False
+            
         sheet = gclient.open(sheet_name).worksheet(worksheet_name)
         
         # Получаем все значения из колонки A (usernames)
@@ -71,19 +76,25 @@ async def check_user_in_whitelist(username, sheet_name, worksheet_name="WhiteLis
         logger.error(f"Error checking whitelist: {e}")
         return False
 
-async def download_media_file(event, sheet_name):
+async def download_media_file(event):
     """Скачивает медиафайл из сообщения"""
     global last_downloaded_file
     
     try:
         # Получаем информацию о отправителе
         sender = await event.get_sender()
-        username = sender.username
+        username = sender.username if sender and hasattr(sender, 'username') else "unknown"
         
-        # Проверяем белый список
-        if not await check_user_in_whitelist(username, sheet_name):
-            logger.info(f"User {username} not in whitelist, skipping download")
-            return
+        logger.info(f"Received media from {username}")
+        
+        # Проверяем белый список (если настроен)
+        sheet_name = os.getenv("GOOGLE_SHEET_NAME")
+        if sheet_name:
+            if not await check_user_in_whitelist(username, sheet_name):
+                logger.info(f"User {username} not in whitelist, skipping download")
+                return
+        else:
+            logger.info("No Google sheet name configured, skipping whitelist check")
         
         # Проверяем размер файла
         if hasattr(event.media, 'document') and event.media.document:
@@ -111,49 +122,67 @@ async def download_media_file(event, sheet_name):
             "download_url": f"/download_file/{os.path.basename(path)}",
             "download_time": datetime.now().isoformat(),
             "chat_id": event.chat_id,
-            "sender_id": sender.id,
+            "sender_id": sender.id if sender else None,
             "username": username
         }
         
-        logger.info(f"File downloaded successfully: {last_downloaded_file['file_name']}")
+        logger.info(f"File downloaded successfully: {last_downloaded_file['file_name']} ({file_size} bytes)")
         
     except Exception as e:
         logger.error(f"Error downloading media file: {e}")
 
-async def start_telegram_client():
-    """Запускает Telegram клиент и настраивает обработчики"""
+async def setup_telegram_client():
+    """Настраивает и запускает Telegram клиент"""
+    global telegram_client
+    
     try:
-        client = TelegramClient("session", API_ID, API_HASH)
+        telegram_client = TelegramClient("session", API_ID, API_HASH)
         
-        @client.on(events.NewMessage(incoming=True))
+        @telegram_client.on(events.NewMessage(incoming=True))
         async def handler(event):
             # Проверяем, что это личное сообщение и содержит медиа
             if event.is_private and event.media:
-                sheet_name = os.getenv("GOOGLE_SHEET_NAME")
-                if sheet_name:
-                    await download_media_file(event, sheet_name)
+                logger.info("Received private message with media")
+                await download_media_file(event)
+            elif event.is_private:
+                logger.info(f"Received private message without media: {event.text}")
         
-        await client.start()
+        await telegram_client.start()
         logger.info("Telegram client started successfully")
-        await client.run_until_disconnected()
+        logger.info(f"Logged in as: {await telegram_client.get_me()}")
+        
+        # Запускаем клиент в фоновом режиме
+        await telegram_client.run_until_disconnected()
         
     except Exception as e:
-        logger.error(f"Error starting Telegram client: {e}")
+        logger.error(f"Error setting up Telegram client: {e}")
 
 def run_telegram_client():
-    """Запускает Telegram клиент в отдельном потоке"""
+    """Запускает Telegram клиент"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_telegram_client())
+    try:
+        loop.run_until_complete(setup_telegram_client())
+    except Exception as e:
+        logger.error(f"Error running Telegram client: {e}")
+    finally:
+        loop.close()
 
 # Запускаем Telegram клиент в фоновом потоке
-import threading
-telegram_thread = threading.Thread(target=run_telegram_client, daemon=True)
-telegram_thread.start()
+telegram_thread = None
+
+@app.before_first_request
+def start_telegram_background():
+    """Запускает Telegram клиент при первом запросе"""
+    global telegram_thread
+    if telegram_thread is None or not telegram_thread.is_alive():
+        telegram_thread = threading.Thread(target=run_telegram_client, daemon=True)
+        telegram_thread.start()
+        logger.info("Telegram client thread started")
 
 @app.route('/')
 def index():
-    return '✅ Telegram server works!'
+    return '✅ Telegram server works! Use /last_file to check downloaded files.'
 
 @app.route('/last_file', methods=['GET'])
 def get_last_file():
@@ -163,7 +192,7 @@ def get_last_file():
     if not last_downloaded_file:
         return jsonify({
             "status": "error", 
-            "message": "No files downloaded yet"
+            "message": "No files downloaded yet. Send a file to the bot first."
         }), 404
     
     # Проверяем, существует ли файл
@@ -201,6 +230,20 @@ def serve_file(filename):
         logger.error(f"Error serving file: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/status', methods=['GET'])
+def status():
+    """Проверяет статус Telegram клиента"""
+    global telegram_client, telegram_thread
+    
+    status_info = {
+        "flask_status": "running",
+        "telegram_client_status": "running" if telegram_client and telegram_client.is_connected() else "not connected",
+        "telegram_thread_status": "alive" if telegram_thread and telegram_thread.is_alive() else "not alive",
+        "last_file": bool(last_downloaded_file)
+    }
+    
+    return jsonify(status_info)
+
 @app.route('/cleanup', methods=['POST'])
 def cleanup_files():
     """Очистка скачанных файлов (для n8n)"""
@@ -230,5 +273,11 @@ def cleanup_files():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
+    import threading
+    # Запускаем Telegram клиент в фоновом режиме
+    telegram_thread = threading.Thread(target=run_telegram_client, daemon=True)
+    telegram_thread.start()
+    
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    logger.info(f"Starting Flask server on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
